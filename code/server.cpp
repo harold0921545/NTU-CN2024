@@ -9,6 +9,8 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+#define debug(x) cerr << #x << " = " << x << '\n'
+
 using namespace std;
 
 int main(int argc, char *argv[]) {
@@ -48,7 +50,7 @@ int main(int argc, char *argv[]) {
             close(sockfd);
             return 1;
         }
-        cout << "Accepted\n";
+        cout << "Client " << inet_ntoa(client_addr.sin_addr) << "is accepted\n";
 
         // recieve
         while (1){
@@ -74,10 +76,10 @@ int main(int argc, char *argv[]) {
                 else if (isupper(buffer[i]))
                     buffer[i] = tolower(buffer[i]);
             }
-            send(client_sockfd, buffer, bytes, 0);
+            while (send(client_sockfd, buffer, bytes, 0) < 0); // if client not received, try again
             cout << "Sent: " << buffer << '\n';
         }
-        
+
         // TODO: pthread
         close(client_sockfd);
     }

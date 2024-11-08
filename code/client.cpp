@@ -14,30 +14,18 @@
 using namespace std;
 
 void print_selection();
+int socket_init();
 void send_message(int sockfd, string messages);
-void recv_message(int sockfd);
+string recv_message(int sockfd);
+void connect_server(int sockfd, char *ip);
+
 
 int main(int argc, char *argv[]) { // argv[1]: IP address of the server
-    string messages;
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0); // IPv4, TCP, default
-    if (sockfd < 0) {
-        cout << "[Creating socket failed]\n";
-        return 1;
-    }
-    cout << "[Socket created]\n";
+    string messages, res;
+    int sockfd = socket_init();
 
     // connect
-    sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(8080); // host-to-network short
-    server_addr.sin_addr.s_addr = inet_addr(argv[1]);
-
-    if (connect(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
-        cout << "[Connecting failed]\n";
-        close(sockfd);
-        return 1;
-    }
-    cout << "[Connected]\n";
+    connect_server(sockfd, argv[1]);
 
     // Login or Register
     while (1){
@@ -51,22 +39,36 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server
         }
         int selection = select[0] - '0';
         if (selection == 1){
-            string username, password;
+            string username, password, msg;
             cout << "Username: ";
             getline(cin, username);
             cout << "Password: ";
             getline(cin, password);
             
-            // TODO
+            msg = "$" + username + "#" + password;
+            send_message(sockfd, msg);
+            res = recv_message(sockfd);
+            if (res == "Success")
+                cout << "[Register success]\n";
+            else
+                cout << "[Register failed]\n";
         }
         else if (selection == 2){
-            string username, password;
+            string username, password, msg;
             cout << "Username: ";
             getline(cin, username);
             cout << "Password: ";
             getline(cin, password);
 
-            // TODO
+            msg = "$$" + username + "#" + password;
+            send_message(sockfd, msg);
+            res = recv_message(sockfd);
+            if (res == "Success"){
+                cout << "[Login success]\n";
+                break;
+            }
+            else
+                cout << "[Login failed]\n";
         }
         else if (selection == 3){ // for testing, need to remove
             break;
@@ -84,7 +86,8 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server
     send_message(sockfd, messages);
 
     // receive respond
-    recv_message(sockfd);
+    res = recv_message(sockfd);
+    cout << "Respond: " << res << '\n';
 
     close(sockfd);
     return 0;
@@ -106,21 +109,45 @@ void send_message(int sockfd, string messages){
     cout << "Sent\n";
 }
 
-void recv_message(int sockfd){
-    cout << "Respond: ";
+string recv_message(int sockfd){
+    string res = "";
     while (1){
-        char buffer[1024] = {0};
+        char buffer[4096] = {0};
         int bytes = recv(sockfd, buffer, sizeof(buffer), 0);
         if (bytes < 0) {
             cout << "[Receiving failed]\n";
             close(sockfd);
             exit(1);
         }
+        res += buffer;
         if (bytes == 0)
             break;
-        cout << buffer;
         if (bytes < sizeof(buffer))
             break;
     }
-    cout << '\n';
+    return res;
+}
+
+void connect_server(int sockfd, char *ip){
+    sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(8080);
+    server_addr.sin_addr.s_addr = inet_addr(ip);
+
+    if (connect(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
+        cout << "[Connecting failed]\n";
+        close(sockfd);
+        exit(0);
+    }
+    cout << "[Connected]\n";
+}
+
+int socket_init(){
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0); // IPv4, TCP, default
+    if (sockfd < 0) {
+        cout << "[Creating socket failed]\n";
+        exit(0);
+    }
+    cout << "[Socket created]\n";
+    return sockfd;
 }

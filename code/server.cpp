@@ -16,16 +16,19 @@ using namespace std;
 struct User {
     string username;
     string password;
-} user[1024];
+} user[4096];
 
 int socket_init();
 
+
 int main(int argc, char *argv[]) {
     int sockfd = socket_init();
+    int user_count = 0;
     if (sockfd < 0)
         return 1;
     // accept
     while (1){
+        // accept
         sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
         int client_sockfd = accept(sockfd, (sockaddr *) &client_addr, &client_addr_len);
@@ -38,7 +41,7 @@ int main(int argc, char *argv[]) {
 
         // recieve
         while (1){
-            char buffer[1024] = {0};
+            char buffer[4096] = {0};
             int bytes = read(client_sockfd, buffer, sizeof(buffer));
             if (bytes < 0) {
                 cout << "Reading failed\n";
@@ -53,15 +56,68 @@ int main(int argc, char *argv[]) {
             cout << "Received: " << buffer << '\n';
 
             // respond
-            // flip the case
-            for (int i = 0; i < bytes; i++){
-                if (islower(buffer[i]))
-                    buffer[i] = toupper(buffer[i]);
-                else if (isupper(buffer[i]))
-                    buffer[i] = tolower(buffer[i]);
+            if (buffer[0] == '$'){
+                if (user_count == 4096){ // should not happen
+                    cout << "User full\n";
+                    continue;
+                }
+                string username, password;
+                bool login = (buffer[1] == '$');
+                for (int i = 1 + login; buffer[i] != '#' && i < bytes; ++i)
+                    username += buffer[i];
+                for (int i = username.size() + 2 + login; i < bytes; ++i)
+                    password += buffer[i];
+                
+                if (login){
+                    bool success = false;
+                    for (int i = 0; i < user_count; ++i){
+                        if (user[i].username == username && user[i].password == password){
+                            while (send(client_sockfd, "Success", 7, 0) < 0);
+                            cout << "[User: " << username <<  " login success]\n";
+                            success = true;
+                            break;
+                        }
+                    }
+                    if (!success){
+                        while (send(client_sockfd, "Failed", 6, 0) < 0);
+                        cout << "[User: " << username <<  " login failed]\n";
+                    }
+                }
+                else{
+                    if (user_count > 4096){ // too many users
+                        while (send(client_sockfd, "Failed", 6, 0) < 0);
+                        cout << "[User full]\n";
+                        continue;
+                    }
+                    bool success = true;
+                    for (int i = 0; i < user_count; ++i){
+                        if (user[i].username == username){
+                            while (send(client_sockfd, "Failed", 6, 0) < 0);
+                            cout << "[User: " << username <<  " register failed: user name exist]\n";
+                            success = false;
+                            break;
+                        }
+                    }
+                    if (!success)
+                        continue;
+                    user[user_count].username = username;
+                    user[user_count].password = password;
+                    user_count++;
+                    while (send(client_sockfd, "Success", 7, 0) < 0);
+                    cout << "[User: " << username <<  " register success]\n";
+                }
             }
-            while (send(client_sockfd, buffer, bytes, 0) < 0); // if client not received, try again
-            cout << "Sent: " << buffer << '\n';
+            else{
+                // flip the case
+                for (int i = 0; i < bytes; i++){
+                    if (islower(buffer[i]))
+                        buffer[i] = toupper(buffer[i]);
+                    else if (isupper(buffer[i]))
+                        buffer[i] = tolower(buffer[i]);
+                }
+                while (send(client_sockfd, buffer, bytes, 0) < 0); // if client not received, try again
+                cout << "Sent: " << buffer << '\n';
+            }
         }
 
         // TODO: pthread
@@ -70,6 +126,8 @@ int main(int argc, char *argv[]) {
     close(sockfd);
     return 0;
 }
+
+
 
 int socket_init(){
     int sockfd = socket(AF_INET, SOCK_STREAM, 0); // IPv4, TCP, default

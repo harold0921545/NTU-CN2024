@@ -19,7 +19,8 @@ struct User {
 } user[4096];
 
 int socket_init();
-
+string recv_message(int sockfd);
+void send_message(int sockfd, string messages);
 
 int main(int argc, char *argv[]) {
     int sockfd = socket_init();
@@ -39,60 +40,60 @@ int main(int argc, char *argv[]) {
         }
         cout << "[Client " << inet_ntoa(client_addr.sin_addr) << " is accepted]\n";
 
-        // recieve
         while (1){
-            char buffer[4096] = {0};
-            int bytes = read(client_sockfd, buffer, sizeof(buffer));
-            if (bytes < 0) {
-                cout << "Reading failed\n";
-                close(client_sockfd);
-                close(sockfd);
-                return 1;
+            // recieve
+            string buffer = recv_message(client_sockfd);
+            int bytes = buffer.size();
+            cout << "Recieved: " << buffer << '\n';
+            
+            bool special = false;
+            if (buffer[0] == '/' && buffer[1] == '$'){
+               for (int i = 2; i < bytes - 1; ++i){
+                   if (buffer[i] == '/' && buffer[i + 1] == '#'){
+                       special = true;
+                       break;
+                   }
+               }
             }
-            if (bytes == 0){
-                cout << "[Client " << inet_ntoa(client_addr.sin_addr) << " disconnected]\n";
-                break;
-            }
-            cout << "Received: " << buffer << '\n';
 
-            // respond
-            if (buffer[0] == '$'){
-                if (user_count == 4096){ // should not happen
+            if (special){ // register or login
+                if (user_count >= 4096){ // should not happen
                     cout << "User full\n";
                     continue;
                 }
                 string username, password;
-                bool login = (buffer[1] == '$');
-                for (int i = 1 + login; buffer[i] != '#' && i < bytes; ++i)
+                bool login = (buffer[2] == '$');
+                for (int i = 2 + login; (buffer[i] != '/' || buffer[i + 1] != '#'); ++i)
                     username += buffer[i];
-                for (int i = username.size() + 2 + login; i < bytes; ++i)
+                for (int i = username.size() + 4 + login; i < bytes; ++i)
                     password += buffer[i];
-                
+                debug(username);
+                debug(password);
                 if (login){
                     bool success = false;
                     for (int i = 0; i < user_count; ++i){
                         if (user[i].username == username && user[i].password == password){
-                            while (send(client_sockfd, "Success", 7, 0) < 0);
+                            send_message(client_sockfd, "Success");
                             cout << "[User: " << username <<  " login success]\n";
                             success = true;
                             break;
                         }
                     }
                     if (!success){
-                        while (send(client_sockfd, "Failed", 6, 0) < 0);
+                        send_message(client_sockfd, "Failed");
                         cout << "[User: " << username <<  " login failed]\n";
                     }
                 }
                 else{
                     if (user_count > 4096){ // too many users
-                        while (send(client_sockfd, "Failed", 6, 0) < 0);
+                        send_message(client_sockfd, "Failed");
                         cout << "[User full]\n";
                         continue;
                     }
                     bool success = true;
                     for (int i = 0; i < user_count; ++i){
                         if (user[i].username == username){
-                            while (send(client_sockfd, "Failed", 6, 0) < 0);
+                            send_message(client_sockfd, "Failed");
                             cout << "[User: " << username <<  " register failed: user name exist]\n";
                             success = false;
                             break;
@@ -103,11 +104,15 @@ int main(int argc, char *argv[]) {
                     user[user_count].username = username;
                     user[user_count].password = password;
                     user_count++;
-                    while (send(client_sockfd, "Success", 7, 0) < 0);
+                    send_message(client_sockfd, "Success");
                     cout << "[User: " << username <<  " register success]\n";
                 }
             }
-            else{
+            else if (buffer == "@logout@"){
+                cout << "[Client " << inet_ntoa(client_addr.sin_addr) << " disconnected]\n";
+                break;
+            }
+            else{ // receive message
                 // flip the case
                 for (int i = 0; i < bytes; i++){
                     if (islower(buffer[i]))
@@ -115,7 +120,7 @@ int main(int argc, char *argv[]) {
                     else if (isupper(buffer[i]))
                         buffer[i] = tolower(buffer[i]);
                 }
-                while (send(client_sockfd, buffer, bytes, 0) < 0); // if client not received, try again
+                send_message(client_sockfd, buffer); // if client not received, try again
                 cout << "Sent: " << buffer << '\n';
             }
         }
@@ -158,4 +163,35 @@ int socket_init(){
     cout << "[Listening]\n";
 
     return sockfd;
+}
+
+string recv_message(int sockfd){
+    string res = "";
+    while (1){
+        char buffer[4096] = {0};
+        int bytes = recv(sockfd, buffer, sizeof(buffer), 0);
+        if (bytes < 0) {
+            cout << "[Receiving failed]\n";
+            close(sockfd);
+            exit(1);
+        }
+        if (bytes == 0)
+            break;
+        res.append(buffer, bytes);
+        if (bytes < sizeof(buffer))
+            break;
+    }
+    return res;
+}
+
+void send_message(int sockfd, string messages){
+    int attempt = 0;
+    while (send(sockfd, messages.c_str(), messages.size(), 0) < 0) {
+        attempt++;
+        if (attempt == 10){
+            cout << "[Sending failed]\n";
+            close(sockfd);
+            exit(1);
+        }
+    }
 }

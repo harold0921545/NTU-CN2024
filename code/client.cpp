@@ -13,7 +13,6 @@
 
 using namespace std;
 
-void print_selection();
 int socket_init();
 void send_message(int sockfd, string messages);
 string recv_message(int sockfd);
@@ -21,6 +20,11 @@ void connect_server(int sockfd, char *ip);
 
 
 int main(int argc, char *argv[]) { // argv[1]: IP address of the server
+    if (argc != 2) {
+        cout << "Usage: " << argv[0] << " <IP>\n";
+        return 1;
+    }
+
     string messages, res;
     int sockfd = socket_init();
 
@@ -29,11 +33,13 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server
 
     // Login or Register
     while (1){
-        print_selection();
+        cout << "1. Register\n";
+        cout << "2. Login\n";
+        cout << "Selection: ";
         string select;
         getline(cin, select);
 
-        if (select.size() != 1 || select[0] < '1' || select[0] > '3') {
+        if (select.size() != 1 || select[0] < '1' || select[0] > '2') {
             cout << "[Invalid selection]\n";
             continue;
         }
@@ -44,8 +50,12 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server
             getline(cin, username);
             cout << "Password: ";
             getline(cin, password);
-            
-            msg = "$" + username + "#" + password;
+            if (username.empty() || password.empty()) {
+                cout << "Empty username or password\n";
+                continue;
+            }
+
+            msg = "/$" + username + "/#" + password;
             send_message(sockfd, msg);
             res = recv_message(sockfd);
             if (res == "Success")
@@ -59,8 +69,12 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server
             getline(cin, username);
             cout << "Password: ";
             getline(cin, password);
+            if (username.empty() || password.empty()) {
+                cout << "Empty username or password\n";
+                continue;
+            }
 
-            msg = "$$" + username + "#" + password;
+            msg = "/$$" + username + "/#" + password;
             send_message(sockfd, msg);
             res = recv_message(sockfd);
             if (res == "Success"){
@@ -70,41 +84,57 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server
             else
                 cout << "[Login failed]\n";
         }
-        else if (selection == 3){ // for testing, need to remove
+    }
+    // Login success
+    while (1){
+        cout << "1. Send message\n";
+        cout << "2. Logout\n";
+        cout << "Selection: ";
+        string select;
+        getline(cin, select);
+
+        if (select.size() != 1 || select[0] < '1' || select[0] > '2') {
+            cout << "[Invalid selection]\n";
+            continue;
+        }
+        int selection = select[0] - '0';
+
+        if (selection == 1){
+            // send message
+            cout << "Message: ";
+            getline(cin, messages);
+            if (messages.empty()) {
+                cout << "Empty message\n";
+                continue;
+            }
+            send_message(sockfd, messages);
+
+            // receive respond
+            res = recv_message(sockfd);
+            cout << "Respond: " << res << '\n';
+        }
+        else if (selection == 2){
+            // logout
+            send_message(sockfd, "@logout@");
+            cout << "[Logout]\n";
             break;
         }
     }
-
-    // send message
-    cout << "Message: ";
-    getline(cin, messages);
-    if (messages.empty()) {
-        cout << "Empty message\n";
-        close(sockfd);
-        return 1;
-    }
-    send_message(sockfd, messages);
-
-    // receive respond
-    res = recv_message(sockfd);
-    cout << "Respond: " << res << '\n';
-
     close(sockfd);
     return 0;
 }
 
 
-void print_selection(){
-    cout << "1. Register\n";
-    cout << "2. Login\n";
-    cout << "Selection: ";
-}
 
 void send_message(int sockfd, string messages){
-    if (send(sockfd, messages.c_str(), messages.size(), 0) < 0) {
-        cout << "[Sending failed]\n";
-        close(sockfd);
-        exit(1);
+    int attempt = 0;
+    while (send(sockfd, messages.c_str(), messages.size(), 0) < 0) {
+        if (attempt == 10){
+            cout << "[Sending failed]\n";
+            close(sockfd);
+            exit(1);
+        }
+        attempt++;
     }
     cout << "Sent\n";
 }
@@ -119,9 +149,9 @@ string recv_message(int sockfd){
             close(sockfd);
             exit(1);
         }
-        res += buffer;
         if (bytes == 0)
             break;
+        res.append(buffer, bytes);
         if (bytes < sizeof(buffer))
             break;
     }
@@ -137,7 +167,7 @@ void connect_server(int sockfd, char *ip){
     if (connect(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
         cout << "[Connecting failed]\n";
         close(sockfd);
-        exit(0);
+        exit(1);
     }
     cout << "[Connected]\n";
 }
@@ -146,7 +176,7 @@ int socket_init(){
     int sockfd = socket(AF_INET, SOCK_STREAM, 0); // IPv4, TCP, default
     if (sockfd < 0) {
         cout << "[Creating socket failed]\n";
-        exit(0);
+        exit(1);
     }
     cout << "[Socket created]\n";
     return sockfd;

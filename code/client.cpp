@@ -14,12 +14,12 @@ using namespace std;
 int socket_init();
 void send_message(int sockfd, string messages);
 string recv_message(int sockfd);
-void connect_server(int sockfd, char *ip);
+void connect_server(int sockfd, char *ip, char *port);
 
 
-int main(int argc, char *argv[]) { // argv[1]: IP address of the server
-    if (argc != 2) {
-        cout << "Usage: " << argv[0] << " <IP>\n";
+int main(int argc, char *argv[]) { // argv[1]: IP address of the server, argv[2]: port number
+    if (argc != 3) {
+        cout << "Usage: " << argv[0] << " <IP> <Port>\n";
         return 1;
     }
 
@@ -27,7 +27,7 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server
     int sockfd = socket_init();
 
     // connect
-    connect_server(sockfd, argv[1]);
+    connect_server(sockfd, argv[1], argv[2]);
 
     // Login or Register
     while (1){
@@ -156,10 +156,10 @@ string recv_message(int sockfd){
     return res;
 }
 
-void connect_server(int sockfd, char *ip){
+void connect_server(int sockfd, char *ip, char *port){
     sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(8080);
+    server_addr.sin_port = htons(atoi(port));
     server_addr.sin_addr.s_addr = inet_addr(ip);
 
     if (connect(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {

@@ -16,12 +16,16 @@ struct User {
     string password;
 } user[4096];
 
-int socket_init();
+int socket_init(char *port);
 string recv_message(int sockfd);
 void send_message(int sockfd, string messages);
 
 int main(int argc, char *argv[]) {
-    int sockfd = socket_init();
+    if (argc > 2){
+        cout << "Usage: " << argv[0] << " <Port>\n";
+        return 1;
+    }
+    int sockfd = socket_init(argv[1]);
     int user_count = 0;
     if (sockfd < 0)
         return 1;
@@ -132,7 +136,7 @@ int main(int argc, char *argv[]) {
 
 
 
-int socket_init(){
+int socket_init(char *port){
     int sockfd = socket(AF_INET, SOCK_STREAM, 0); // IPv4, TCP, default
     if (sockfd < 0) {
         cout << "[Creating socket failed]\n";
@@ -142,7 +146,7 @@ int socket_init(){
     // bind
     sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(8080); // host-to-network short
+    server_addr.sin_port = htons(atoi(port)); // host-to-network short
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY); // accept any IP address
 
     if (bind(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {

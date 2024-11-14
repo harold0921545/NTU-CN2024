@@ -12,12 +12,12 @@ make
 ### server
 
 ```sh
-./server
+./server <port number>
 ```
 ### client
 
 ```sh
-./client <server ip>
+./client <server ip> <port number>
 ```
 1. **Connect to the Server**
    - Once connected, you will be prompted to choose one of two options:

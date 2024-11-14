@@ -21,7 +21,7 @@ string recv_message(int sockfd);
 void send_message(int sockfd, string messages);
 
 int main(int argc, char *argv[]) {
-    if (argc > 2){
+    if (argc != 2){
         cout << "Usage: " << argv[0] << " <Port>\n";
         return 1;
     }

@@ -6,9 +6,17 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <gtkmm.h>
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/videoio.hpp>
+#include <opencv2/highgui.hpp>
+#include <openssl/ssl.h>
+#include <openssl/crypto.h>
 
 #define debug(x) cerr << #x << " = " << x << '\n'
 
+using namespace cv;
 using namespace std;
 
 int socket_init();

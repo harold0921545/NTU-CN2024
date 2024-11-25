@@ -1,5 +1,6 @@
 # NTU-CN2024
-Computer Network project - a real-time online chatroom
+Computer Network project - a real-time online chatroom.
+Currently, we are in Phase 1. Phase 2 will be made public once the project deadline is reached.
 
 ## Compilation
 ```sh

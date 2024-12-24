@@ -7,7 +7,6 @@
 #include <map>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <signal.h>
 /*
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -22,7 +21,7 @@
 //using namespace cv;
 using namespace std;
 
-void signal_handler(int signum);
+void message_receiver();
 void select_options(int sockfd, int num);
 int socket_init();
 void send_message(int sockfd, string messages);
@@ -54,8 +53,6 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server, argv[2]
 
     // connect
     connect_server(sockfd, argv[1], argv[2]);
-    signal(SIGALRM, signal_handler);
-    alarm(1);
     // Login or Register
     while (1){
         select_options(sockfd, 1);
@@ -82,7 +79,8 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server, argv[2]
 
             send_message(sockfd, msg);
             res = recv_message(sockfd);
-            debug(res);
+            // debug(res);
+
             if (res == "Success")
                 cout << "[Register success]\n";
             else
@@ -102,7 +100,7 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server, argv[2]
             msg = "/$$" + username + "/#" + password  + "#" + argv[3]; // /$$username/#password#chat_port
             send_message(sockfd, msg);
             res = recv_message(sockfd);
-            debug(res);
+            // debug(res);
             if (res == "Success"){
                 cout << "[Login success]\n";
                 login_sucess(sockfd, username);
@@ -169,12 +167,16 @@ string recv_message(int sockfd){
         char buffer[4096] = {0};
         int bytes = recv(sockfd, buffer, sizeof(buffer), 0);
         if (bytes < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) // no data available
+                break;
             if (attempt == 10){
                 cout << "[Receiving failed]\n";
                 close(sockfd);
                 exit(1);
             }
             attempt++;
+            sleep(1);
+            continue;
         }
         if (bytes == 0)
             break;
@@ -191,10 +193,15 @@ void connect_server(int sockfd, char *ip, char *port){
     server_addr.sin_port = htons(atoi(port));
     server_addr.sin_addr.s_addr = inet_addr(ip);
 
-    if (connect(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
-        cout << "[Connecting failed]\n";
-        close(sockfd);
-        exit(1);
+    int attempt = 0;
+    while (connect(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
+        if (attempt == 10){
+            cout << "[Connecting failed]\n";
+            close(sockfd);
+            exit(1);
+        }
+        attempt++;
+        sleep(1);
     }
     cout << "[Connected]\n";
 }
@@ -230,9 +237,13 @@ void login_sucess(int sockfd, string username){
     Login = true;
 
     while (1){
+        message_receiver();
+
         select_options(sockfd, 2);
         string select, messages;
         getline(cin, select);
+        
+        message_receiver();
 
         if (select.size() != 1 || select[0] < '1' || select[0] > '2') {
             cout << "[Invalid selection]\n";
@@ -241,26 +252,39 @@ void login_sucess(int sockfd, string username){
         int selection = select[0] - '0';
 
         if (selection == 1){ // send message
+            message_receiver();
+
             select_options(sockfd, 3);
             string name, msg;
             getline(cin, name);
+            message_receiver();
+
             if (name.empty()) {
                 cout << "Empty name\n";
                 continue;
             }
+
             msg = "@verify@" + name;
             send_message(sockfd, msg);
+
+            message_receiver();
+
             string res = recv_message(sockfd);
+
+            message_receiver();
             // what if user logout now?
             if (res == "Failed"){
                 cout << "User not found\n";
                 continue;
             }
-            
+
+            message_receiver();
             open_chat(sockfd, name, username);
+            message_receiver();
         }
         else if (selection == 2){ // logout
-            // logout
+            message_receiver();
+
             send_message(sockfd, "@logout@");
             cout << "[Logout]\n";
             break;
@@ -270,7 +294,7 @@ void login_sucess(int sockfd, string username){
     close(chat_sockfd);
 }
 
-void signal_handler(int signum){ // receving chat message
+void message_receiver(){ // receving chat message
     if (Login){
         string res = recv_message(chatting_sockfd);
         for (int i = 0; i < (int)res.size(); ++i){
@@ -281,7 +305,7 @@ void signal_handler(int signum){ // receving chat message
                     name += res[j];
                 for (j = name.size() + i + 2; res[j] != ':'; ++j)
                     username += res[j];
-                cout << name << ": ";
+                cout << "[New message from " << name << "] ";
                 for (j = name.size() + username.size() + i + 3; res[j] != '\n' && j < (int)res.size(); ++j){
                     cout << res[j];
                     msg += res[j];
@@ -293,7 +317,6 @@ void signal_handler(int signum){ // receving chat message
             }
         }
     }
-    alarm(1);
 }
 
 
@@ -320,16 +343,28 @@ void open_chat(int sockfd, string name, string username){
 }
 
 void chat_message(int sockfd, string name, string username){
+    message_receiver();
+
     string messages;
     cout << "Message: ";
     getline(cin, messages);
+
+    message_receiver();
+    
     if (messages.empty()) {
         cout << "Empty message\n";
         return ;
     }
+    chat_history[name] += ": " + messages + "\n";
     messages = "#" + username + "#" + name + ":" + messages; // #from#to:message
-    chat_history[name] += messages;
     send_message(sockfd, messages);
+    string res = recv_message(sockfd);
+    if (res == "Failed")
+        cout << "[Chat message failed]\n";
+    else
+        cout << "[Chat message sent]\n";
+
+    message_receiver();
 }
 
 int chat_socket_init(char *port){
@@ -344,19 +379,29 @@ int chat_socket_init(char *port){
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(atoi(port)); // host-to-network short
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY); // accept any IP address
+    int attempt = 0;
 
-    if (bind(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
-        cout << "[Binding socket failed]\n";
-        close(sockfd);
-        return -1;
+    while (bind(sockfd, (sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
+        if (attempt == 10){
+            cout << "[Binding socket failed]\n";
+            close(sockfd);
+            exit(1);
+        }
+        attempt++;
+        sleep(1);
     }
     cout << "[Socket bound]\n";
 
+    attempt = 0;
     // listen
-    if (listen(sockfd, 10) < 0) { // 10 is the maximum number of connections
-        cout << "[Listening failed]\n";
-        close(sockfd);
-        return -1;
+    while (listen(sockfd, 10) < 0) { // 10 is the maximum number of connections
+        if (attempt == 10){
+            cout << "[Listening failed]\n";
+            close(sockfd);
+            exit(1);
+        }
+        attempt++;
+        sleep(1);
     }
     cout << "[Listening]\n";
 

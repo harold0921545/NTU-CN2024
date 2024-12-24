@@ -198,7 +198,7 @@ void *handle_client(void *arg){
                 username += buffer[i];
             for (int i = username.size() + 4 + login; i < n; ++i)
                 password += buffer[i];
-            debug(password);
+            // debug(password);
             if (login){
                 // chat port
                 string chat_port = "";

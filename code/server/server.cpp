@@ -30,8 +30,10 @@ struct User {
     string password;
     int sockfd; // client socket
     int chat_sockfd; // chat socket
+    int file_sockfd; // file socket
     SSL *ssl;
     SSL *chatting_ssl;
+    SSL *file_ssl;
     bool online = false;
 } user[4096];
 
@@ -50,22 +52,22 @@ struct thread_pool {
 void ssl_init();
 SSL_CTX *create_context();
 void configure_context(SSL_CTX *ctx);
+
 int socket_init(char *port);
 string recv_message(SSL *ssl);
 void send_message(SSL *ssl, string messages);
 void *handle_client(void *arg);
 
-
 void thread_init();
 
 int user_count = 0;
-int server_sockfd;
+int server_sockfd, file_transfer_sockfd;
 set<string> online_users;
 SSL_CTX *ctx;
 
-int main(int argc, char *argv[]) { // argv[1]: port number, argv[2]: chat port number
-    if (argc != 3){
-        cout << "Usage: " << argv[0] << " <Port1> <Port2>\n";
+int main(int argc, char *argv[]) { // argv[1]: port number, argv[2]: chat port number, argv[3]: file port number
+    if (argc != 4){
+        cout << "Usage: " << argv[0] << " <Port1> <Port2> <Port3>\n";
         return 1;
     }
 
@@ -81,6 +83,9 @@ int main(int argc, char *argv[]) { // argv[1]: port number, argv[2]: chat port n
     cout << "[Chat server started]\n";
     server_sockfd = socket_init(argv[2]); // chat socket
     
+    cout << "[File server started]\n";
+    file_transfer_sockfd = socket_init(argv[3]); // file socket
+
     if (sockfd < 0)
         return 1;
     
@@ -305,7 +310,7 @@ void *handle_client(void *arg){
                         socklen_t chat_client_addr_len = sizeof(chat_client_addr);
                         int chat_sockfd;
                         while (1){    
-                            chat_sockfd = accept(server_sockfd, (sockaddr *) &chat_client_addr, &chat_client_addr_len); // no race condition, mutex
+                            chat_sockfd = accept(server_sockfd, (sockaddr *) &chat_client_addr, &chat_client_addr_len);
                             if (chat_sockfd > 0) { // retry every 2 seconds
                                 break;
                             }
@@ -321,6 +326,27 @@ void *handle_client(void *arg){
                         }
                         
                         cout << "[Client " << inet_ntoa(chat_client_addr.sin_addr) << "'s chat connection is accepted]\n";
+
+                        // file connection
+                        sockaddr_in file_client_addr;
+                        socklen_t file_client_addr_len = sizeof(file_client_addr);
+                        int file_sockfd;
+                        while (1){    
+                            file_sockfd = accept(file_transfer_sockfd, (sockaddr *) &file_client_addr, &file_client_addr_len);
+                            if (file_sockfd > 0) { // retry every 2 seconds
+                                break;
+                            }
+                        }
+                        user[i].file_sockfd = file_sockfd;
+                        user[i].file_ssl = SSL_new(ctx);
+                        SSL_set_fd(user[i].file_ssl, file_sockfd);
+                        if (SSL_accept(user[i].file_ssl) <= 0) { // if failed, close the connection
+                            cout << "[SSL accept failed]\n";
+                            close(file_sockfd);
+                            pthread_exit(NULL);
+                        }
+
+                        cout << "[Client " << inet_ntoa(chat_client_addr.sin_addr) << "'s file transfer connection is accepted]\n";
 
                         pthread_mutex_unlock(&thread_pool.mutex);
                         break;
@@ -374,6 +400,10 @@ void *handle_client(void *arg){
                     SSL_free(user[i].chatting_ssl);
                     close(user[i].chat_sockfd);
 
+                    SSL_shutdown(user[i].file_ssl);
+                    SSL_free(user[i].file_ssl);
+                    close(user[i].file_sockfd);
+
                     pthread_mutex_unlock(&thread_pool.mutex);
                     break;
                 }
@@ -419,12 +449,10 @@ void *handle_client(void *arg){
             for (int i = username.size() + 2; buffer[i] != ':'; ++i)
                 name += buffer[i];
             
-            // int sockfd_to_send = -1;
             SSL *ssl_to_send;
             bool success = false;
             for (int i = 0; i < user_count; ++i){
                 if (user[i].username == name){
-                    // sockfd_to_send = user[i].chat_sockfd;
                     ssl_to_send = user[i].chatting_ssl;
                     success = true;
                     break;
@@ -436,8 +464,78 @@ void *handle_client(void *arg){
             }
             else{
                 send_message(ssl, "Success");
+
+                pthread_mutex_lock(&thread_pool.mutex);
                 send_message(ssl_to_send, buffer);
+                pthread_mutex_unlock(&thread_pool.mutex);
+                
                 cout << "[Message sent]\n";
+            }
+        }
+        else if (buffer[0] == '%'){ // file transfer
+            // %from#to$file_name@file_size
+            string name = "", username = "", file_name = "", _file_size = "";
+            long file_size = 0;
+            for (int i = 1; buffer[i] != '#'; ++i)
+                username += buffer[i];
+            for (int i = username.size() + 2; buffer[i] != '$'; ++i)
+                name += buffer[i];
+            for (int i = name.size() + username.size() + 3; buffer[i] != '@'; ++i)
+                file_name += buffer[i];
+            for (int i = file_name.size() + name.size() + username.size() + 4; i < bytes; ++i)
+                _file_size += buffer[i];
+            file_size = stol(_file_size);
+            
+            SSL *ssl_to_send;
+            bool success = false;
+            for (int i = 0; i < user_count; ++i){
+                if (user[i].username == name){
+                    ssl_to_send = user[i].file_ssl;
+                    success = true;
+                    break;
+                }
+            }
+
+            if (success == false){
+                send_message(ssl, "Failed");
+                cout << "[User not found]\n";
+            }
+            else{
+                send_message(ssl, "Success");
+                pthread_mutex_lock(&thread_pool.mutex);
+                send_message(ssl_to_send, buffer); // tell the receiver
+                cout << "[File transfer request sent]\n";
+                string res = recv_message(ssl_to_send);
+                
+                if (res != "Success"){
+                    cout << "[File transfer failed]\n";
+                    pthread_mutex_unlock(&thread_pool.mutex);
+                    continue;
+                }
+
+                while (file_size > 0){
+                    string _buffer = recv_message(ssl);
+                    int attempt = 0;
+                    while (1){
+                        send_message(ssl_to_send, _buffer);
+                        string _res = recv_message(ssl_to_send);
+                        if (_res == "Success"){
+                            send_message(ssl, "Success");
+                            break;
+                        }
+                        else{
+                            attempt++;
+                            if (attempt == 10){
+                                cout << "[File transfer failed]\n";
+                                send_message(ssl, "Failed");
+                                break;
+                            }
+                        }
+                    }
+                    file_size -= _buffer.size();
+                }
+                pthread_mutex_unlock(&thread_pool.mutex);
+                cout << "[File transfer success]\n";
             }
         }
     }

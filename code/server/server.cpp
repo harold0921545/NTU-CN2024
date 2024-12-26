@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <set>
+#include <map>
 #include <algorithm>
 /*
 #include <opencv2/core.hpp>
@@ -64,6 +65,7 @@ int user_count = 0;
 int server_sockfd, file_transfer_sockfd;
 set<string> online_users;
 SSL_CTX *ctx;
+map<string, vector<string>> files; // username -> files
 
 int main(int argc, char *argv[]) { // argv[1]: port number, argv[2]: chat port number, argv[3]: file port number
     if (argc != 4){
@@ -237,6 +239,7 @@ void *handle_client(void *arg){
     job data = *(job *)arg;
     int client_sockfd = data.sockfd;
     string ip = data.ip;
+    string User = "";
 
     // SSL connection
     pthread_mutex_lock(&thread_pool.mutex);
@@ -253,6 +256,7 @@ void *handle_client(void *arg){
     }
     cout << "[SSL connection established]\n";
 
+    SSL *file_ssl;
     while (1){
         // recieve
         string buffer = recv_message(ssl);
@@ -294,6 +298,7 @@ void *handle_client(void *arg){
                 bool success = false;
                 for (int i = 0; i < user_count; ++i){
                     if (user[i].username == username && user[i].password == password){
+                        User = username;
                         send_message(ssl, "Success");
                         cout << "[User: " << username <<  " login success]\n";
                         success = true;
@@ -339,6 +344,7 @@ void *handle_client(void *arg){
                         }
                         user[i].file_sockfd = file_sockfd;
                         user[i].file_ssl = SSL_new(ctx);
+                        file_ssl = user[i].file_ssl;
                         SSL_set_fd(user[i].file_ssl, file_sockfd);
                         if (SSL_accept(user[i].file_ssl) <= 0) { // if failed, close the connection
                             cout << "[SSL accept failed]\n";
@@ -408,6 +414,7 @@ void *handle_client(void *arg){
                     break;
                 }
             }
+            User = "";
             cout << "[User " << name << " logout]\n";
         }
         else if (buffer == "@exit@"){
@@ -486,11 +493,9 @@ void *handle_client(void *arg){
                 _file_size += buffer[i];
             file_size = stol(_file_size);
             
-            SSL *ssl_to_send;
             bool success = false;
             for (int i = 0; i < user_count; ++i){
                 if (user[i].username == name){
-                    ssl_to_send = user[i].file_ssl;
                     success = true;
                     break;
                 }
@@ -501,42 +506,82 @@ void *handle_client(void *arg){
                 cout << "[User not found]\n";
             }
             else{
-                send_message(ssl, "Success");
-                pthread_mutex_lock(&thread_pool.mutex);
-                send_message(ssl_to_send, buffer); // tell the receiver
-                cout << "[File transfer request sent]\n";
-                string res = recv_message(ssl_to_send);
-                
-                if (res != "Success"){
-                    cout << "[File transfer failed]\n";
-                    pthread_mutex_unlock(&thread_pool.mutex);
+                send_message(ssl, "Success"); // tell client ready to receive
+
+                // receive file and store
+                FILE *file = fopen(file_name.c_str(), "wb");
+                if (file == NULL){
+                    cout << "[File open failed]\n";
                     continue;
                 }
 
                 while (file_size > 0){
                     string _buffer = recv_message(ssl);
+                    fwrite(_buffer.c_str(), 1, _buffer.size(), file);
+                    send_message(ssl, "Success");
+                    file_size -= _buffer.size();
+                }
+                
+                fclose(file);
+                pthread_mutex_lock(&thread_pool.mutex);
+                files[name].push_back(buffer);
+                pthread_mutex_unlock(&thread_pool.mutex);
+            }
+        }
+        else if (buffer == "@file@"){ // send file to receiver
+            while (!files[User].empty()){
+                string _file = files[User].back();
+                files[User].pop_back();
+                send_message(file_ssl, _file);
+                string res = recv_message(file_ssl);
+                if (res != "Success"){
+                    cout << "[File transfer failed]\n";
+                    break;
+                }
+
+                string name = "", username = "", file_name = "", _file_size = "";
+                long file_size = 0;
+                for (int i = 1; _file[i] != '#'; ++i)
+                    name += _file[i];
+                for (int i = name.size() + 2; _file[i] != '$'; ++i)
+                    username += _file[i];
+                for (int i = name.size() + username.size() + 3; _file[i] != '@'; ++i)
+                    file_name += _file[i];
+                for (int i = file_name.size() + name.size() + username.size() + 4; i < (int)_file.size(); ++i)
+                    _file_size += _file[i];
+                file_size = stol(_file_size);
+
+                FILE *file = fopen(file_name.c_str(), "rb");
+                if (file == NULL){
+                    cout << "[File not found]\n";
+                    continue;
+                }
+                char _buffer[2048] = {0};
+
+                while (file_size > 0){
+                    int _bytes = fread(_buffer, 1, sizeof(_buffer), file);
                     int attempt = 0;
                     while (1){
-                        send_message(ssl_to_send, _buffer);
-                        string _res = recv_message(ssl_to_send);
-                        if (_res == "Success"){
-                            send_message(ssl, "Success");
+                        send_message(file_ssl, string(_buffer, _bytes));
+                        res = recv_message(file_ssl);
+                        if (res == "Success"){
+                            memset(_buffer, 0, sizeof(_buffer));
                             break;
                         }
                         else{
                             attempt++;
                             if (attempt == 10){
-                                cout << "[File transfer failed]\n";
-                                send_message(ssl, "Failed");
-                                break;
+                                cout << "[Transfer file failed]\n";
+                                pthread_exit(NULL);
                             }
                         }
                     }
-                    file_size -= _buffer.size();
+                    file_size -= _bytes;
                 }
-                pthread_mutex_unlock(&thread_pool.mutex);
-                cout << "[File transfer success]\n";
             }
+
+            debug(files[User].size());
+            send_message(file_ssl, "No more files");
         }
     }
     

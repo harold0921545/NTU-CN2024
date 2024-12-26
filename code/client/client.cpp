@@ -26,7 +26,7 @@ using namespace std;
 void ssl_init();
 SSL_CTX *create_context();
 void configure_context(SSL_CTX *ctx);
-void receiver();
+void receiver(SSL *ssl);
 void select_options(SSL *ssl, int num);
 int socket_init();
 void send_message(SSL *ssl, string messages);
@@ -36,6 +36,7 @@ void login_sucess(SSL *ssl, string username);
 void open_chat(SSL *ssl, string name, string username);
 void chat_message(SSL *ssl, string name, string username);
 void transfer_file(SSL *ssl, string name, string username);
+void file_receiver(SSL *ssl);
 
 string server_ip, chat_port, file_port;
 bool Login = false;
@@ -150,7 +151,8 @@ void select_options(SSL *ssl, int num){
     else if (num == 2){ // login success
         cout << "1. Texting\n";
         cout << "2. Transfer file\n";
-        cout << "3. Logout\n";
+        cout << "3. Receive file\n";
+        cout << "4. Logout\n";
         cout << "Selection: ";
     }
     else if (num == 3){ // send message
@@ -300,8 +302,8 @@ void login_sucess(SSL *ssl, string username){
     connect_server(file_transfer_sockfd, (char *)server_ip.c_str(), (char *)file_port.c_str());
 
     // non-blocking mode
-    flags = fcntl(file_transfer_sockfd, F_GETFL, 0);
-    fcntl(file_transfer_sockfd, F_SETFL, flags | O_NONBLOCK);
+    // flags = fcntl(file_transfer_sockfd, F_GETFL, 0);
+    // fcntl(file_transfer_sockfd, F_SETFL, flags | O_NONBLOCK);
 
     file_transfer_ssl = SSL_new(ctx);
     SSL_set_fd(file_transfer_ssl, file_transfer_sockfd);
@@ -320,27 +322,22 @@ void login_sucess(SSL *ssl, string username){
     Login = true;
 
     while (1){
-        receiver();
+        receiver(ssl);
 
         select_options(ssl, 2);
         string select, messages;
         getline(cin, select);
         
-        receiver();
-
-        if (select.size() != 1 || select[0] < '1' || select[0] > '3') {
+        if (select.size() != 1 || select[0] < '1' || select[0] > '4') {
             cout << "[Invalid selection]\n";
             continue;
         }
         int selection = select[0] - '0';
 
         if (selection == 1 || selection == 2){ // send message, file transfer
-            receiver();
-
             select_options(ssl, 3);
             string name, msg;
             getline(cin, name);
-            receiver();
 
             if (name.empty()) {
                 cout << "Empty name\n";
@@ -350,26 +347,23 @@ void login_sucess(SSL *ssl, string username){
             msg = "@verify@" + name;
             send_message(ssl, msg);
 
-            receiver();
-
             string res = recv_message(ssl);
-
-            receiver();
             // what if user logout now?
             if (res == "Failed"){
                 cout << "User not found\n";
                 continue;
             }
 
-            receiver();
             if (selection == 1)
                 open_chat(ssl, name, username);
             else if (selection == 2)
                 transfer_file(ssl, name, username);
-            receiver();
         }
-        else if (selection == 3){ // logout
-            receiver();
+        else if (selection == 3){ // receive file
+            file_receiver(ssl);
+        }
+        else if (selection == 4){ // logout
+            receiver(ssl);
 
             send_message(ssl, "@logout@");
             cout << "[Logout]\n";
@@ -385,8 +379,9 @@ void login_sucess(SSL *ssl, string username){
     return ;
 }
 
-void receiver(){ // receving chat message
+void receiver(SSL *ssl){ // receving chat message
     if (Login){
+        // chat message
         string res = recv_message(chatting_ssl);
         for (int i = 0; i < (int)res.size(); ++i){
             if (res[i] == '#'){
@@ -407,43 +402,47 @@ void receiver(){ // receving chat message
                 i = j;
             }
         }
-        string res2 = recv_message(file_transfer_ssl);
-        for (int i = 0; i < (int)res2.size(); ++i){
-            if (res2[i] == '%'){
-                string name = "", username = "", file_name = "", _file_size = "";
-                long file_size = 0;
-                int j;
-                for (j = i + 1; res2[j] != '#'; ++j)
-                    name += res2[j];
-                for (j = name.size() + i + 2; res2[j] != '$'; ++j)
-                    username += res2[j];
-                for (j = name.size() + username.size() + i + 3; res2[j] != '@'; ++j)
-                    file_name += res2[j];
-                for (j = file_name.size() + name.size() + username.size() + i + 4; j < (int)res2.size(); ++j)
-                    _file_size += res2[j];
-                file_size = stol(_file_size);
-                cout << "[New file from " << name << "] " << file_name << " " << file_size << " bytes\n";
-                i = j;
-                send_message(file_transfer_ssl, "Success"); // tell server ready to receive
-
-                FILE *file = fopen(file_name.c_str(), "wb");
-                if (file == NULL){
-                    cout << "File not found\n";
-                    return ;
-                }
-                while (file_size > 0){
-                    string buffer = recv_message(file_transfer_ssl);
-                    fwrite(buffer.c_str(), 1, buffer.size(), file);
-                    file_size -= buffer.size();
-                    send_message(file_transfer_ssl, "Success");
-                }
-                fclose(file);
-                cout << "[File transfer success]\n";
-            }
-        }
     }
 }
 
+void file_receiver(SSL *ssl){
+    // file transfer
+    while (1){
+        send_message(ssl, "@file@");
+        string res2 = recv_message(file_transfer_ssl);
+        
+        if (res2 == "No more files" || res2.empty())
+            break;
+        string name = "", username = "", file_name = "", _file_size = "";
+        long file_size = 0;
+        for (int i = 1; res2[i] != '#'; ++i)
+            name += res2[i];
+        for (int i = name.size() + 2; res2[i] != '$'; ++i)
+            username += res2[i];
+        for (int i = name.size() + username.size() + 3; res2[i] != '@'; ++i)
+            file_name += res2[i];
+        for (int i = file_name.size() + name.size() + username.size() + 4; i < (int)res2.size(); ++i)
+            _file_size += res2[i];
+        file_size = stol(_file_size);
+        cout << "[New file from " << name << "] " << file_name << " " << file_size << " bytes\n";
+
+        send_message(file_transfer_ssl, "Success"); // tell server ready to receive
+
+        FILE *file = fopen(file_name.c_str(), "wb");
+        if (file == NULL){
+            cout << "File not found\n";
+            return ;
+        }
+        while (file_size > 0){
+            string buffer = recv_message(file_transfer_ssl);
+            send_message(file_transfer_ssl, "Success");
+            fwrite(buffer.c_str(), 1, buffer.size(), file);
+            file_size -= buffer.size();
+        }
+        fclose(file);
+        cout << "[File " << file_name <<  " received]\n";
+    }
+}
 
 void open_chat(SSL *ssl, string name, string username){
     cout << "-----------------------------------\n";
@@ -468,13 +467,9 @@ void open_chat(SSL *ssl, string name, string username){
 }
 
 void chat_message(SSL *ssl, string name, string username){
-    receiver();
-
     string messages;
     cout << "Message: ";
     getline(cin, messages);
-
-    receiver();
     
     if (messages.empty()) {
         cout << "Empty message\n";
@@ -488,18 +483,13 @@ void chat_message(SSL *ssl, string name, string username){
         cout << "[Chat message failed]\n";
     else
         cout << "[Chat message sent]\n";
-
-    receiver();
 }
 
 void transfer_file(SSL *ssl, string name, string username){
-    receiver();
-
     string file_name;
     cout << "Please enter file name: ";
     getline(cin, file_name);
 
-    receiver();
     if (file_name.empty()) {
         cout << "Empty file name\n";
         return ;
@@ -516,7 +506,7 @@ void transfer_file(SSL *ssl, string name, string username){
 
     string msg = "%" + username + "#" + name + "$" + file_name + "@" + to_string(file_size); // %from#to$file_name@file_size
     send_message(ssl, msg);
-    string res = recv_message(ssl);
+    string res = recv_message(ssl); // server response
 
     
     if (res == "Failed"){
@@ -529,10 +519,11 @@ void transfer_file(SSL *ssl, string name, string username){
         int attempt = 0;
         while (1){
             send_message(ssl, string(buffer, bytes));
-            memset(buffer, 0, sizeof(buffer));
             res = recv_message(ssl);
-            if (res == "Success")
+            if (res == "Success"){
+                memset(buffer, 0, sizeof(buffer));
                 break;
+            }
             else{
                 attempt++;
                 if (attempt == 10){
@@ -544,8 +535,8 @@ void transfer_file(SSL *ssl, string name, string username){
         file_size -= bytes;
     }
 
+    // debug(file_size);
+
     fclose(file);
     cout << "[Transfer file success]\n";
-
-    receiver();
 }

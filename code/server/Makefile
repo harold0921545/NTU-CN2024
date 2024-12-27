@@ -1,10 +1,10 @@
 FLAGS=-Wall -Werror -Wshadow -std=c++17
 SSL=-lssl -lcrypto
-CV=`pkg-config --cflags --libs opencv4`
 PTHREAD=-lpthread
+SDL2=-lSDL2
 
 all:
-	g++ $(FLAGS) server.cpp -o server $(SSL) $(CV) $(PTHREAD)
+	g++ $(FLAGS) server.cpp -o server $(SSL) $(PTHREAD) $(SDL2)
 
 .PHONY: clean
 clean:

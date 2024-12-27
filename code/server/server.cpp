@@ -10,6 +10,8 @@
 #include <set>
 #include <map>
 #include <algorithm>
+#include <fstream>
+#include <vector>
 /*
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -19,7 +21,7 @@
 #include <openssl/crypto.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-
+#include <SDL2/SDL.h>
 
 #define debug(x) cerr << #x << " = " << x << '\n'
 
@@ -32,9 +34,11 @@ struct User {
     int sockfd; // client socket
     int chat_sockfd; // chat socket
     int file_sockfd; // file socket
+    int audio_sockfd; // audio socket
     SSL *ssl;
     SSL *chatting_ssl;
     SSL *file_ssl;
+    SSL *audio_ssl;
     bool online = false;
 } user[4096];
 
@@ -62,14 +66,14 @@ void *handle_client(void *arg);
 void thread_init();
 
 int user_count = 0;
-int server_sockfd, file_transfer_sockfd;
+int server_sockfd, file_transfer_sockfd, audio_transfer_sockfd;
 set<string> online_users;
 SSL_CTX *ctx;
-map<string, vector<string>> files; // username -> files
+map<string, vector<string>> files, audios;
 
-int main(int argc, char *argv[]) { // argv[1]: port number, argv[2]: chat port number, argv[3]: file port number
-    if (argc != 4){
-        cout << "Usage: " << argv[0] << " <Port1> <Port2> <Port3>\n";
+int main(int argc, char *argv[]) { // argv[1]: port number, argv[2]: chat port number, argv[3]: file port number, argv[4]: audio port number
+    if (argc != 5){
+        cout << "Usage: " << argv[0] << " <Port1> <Port2> <Port3> <Port4>\n";
         return 1;
     }
 
@@ -87,6 +91,9 @@ int main(int argc, char *argv[]) { // argv[1]: port number, argv[2]: chat port n
     
     cout << "[File server started]\n";
     file_transfer_sockfd = socket_init(argv[3]); // file socket
+
+    cout << "[Audio server started]\n";
+    audio_transfer_sockfd = socket_init(argv[4]); // audio socket
 
     if (sockfd < 0)
         return 1;
@@ -113,8 +120,6 @@ int main(int argc, char *argv[]) { // argv[1]: port number, argv[2]: chat port n
         pthread_create(&thread_pool.pool[thread_pool.thread_count++], &thread_pool.client_attr, handle_client, (void *)&data);
         
         pthread_mutex_unlock(&thread_pool.mutex);
-        
-        // debug(thread_pool.thread_count);
     }
 
     close(sockfd);
@@ -256,7 +261,7 @@ void *handle_client(void *arg){
     }
     cout << "[SSL connection established]\n";
 
-    SSL *file_ssl;
+    SSL *file_ssl, *audio_ssl;
     while (1){
         // recieve
         string buffer = recv_message(ssl);
@@ -353,7 +358,28 @@ void *handle_client(void *arg){
                         }
 
                         cout << "[Client " << inet_ntoa(chat_client_addr.sin_addr) << "'s file transfer connection is accepted]\n";
+                        
+                        // audio connection
+                        sockaddr_in audio_client_addr;
+                        socklen_t audio_client_addr_len = sizeof(audio_client_addr);
+                        int audio_sockfd;
+                        while (1){    
+                            audio_sockfd = accept(audio_transfer_sockfd, (sockaddr *) &audio_client_addr, &audio_client_addr_len);
+                            if (audio_sockfd > 0) { // retry every 2 seconds
+                                break;
+                            }
+                        }
+                        user[i].audio_sockfd = audio_sockfd;
+                        user[i].audio_ssl = SSL_new(ctx);
+                        audio_ssl = user[i].audio_ssl;
+                        SSL_set_fd(user[i].audio_ssl, audio_sockfd);
+                        if (SSL_accept(user[i].audio_ssl) <= 0) { // if failed, close the connection
+                            cout << "[SSL accept failed]\n";
+                            close(audio_sockfd);
+                            pthread_exit(NULL);
+                        }
 
+                        cout << "[Client " << inet_ntoa(chat_client_addr.sin_addr) << "'s audio transfer connection is accepted]\n";
                         pthread_mutex_unlock(&thread_pool.mutex);
                         break;
                     }
@@ -363,7 +389,7 @@ void *handle_client(void *arg){
                     cout << "[User: " << username <<  " login failed]\n";
                 }
             }
-            else{
+            else{ // register
                 if (user_count > 4096){ // too many users
                     send_message(ssl, "Failed");
                     cout << "[User full]\n";
@@ -393,7 +419,7 @@ void *handle_client(void *arg){
                 cout << "[User: " << username <<  " register success]\n";
             }
         }
-        else if (buffer == "@logout"){
+        else if (buffer == "@logout@"){
             string name;
             for (int i = 0; i < user_count; ++i){
                 if (user[i].sockfd == client_sockfd){
@@ -409,7 +435,11 @@ void *handle_client(void *arg){
                     SSL_shutdown(user[i].file_ssl);
                     SSL_free(user[i].file_ssl);
                     close(user[i].file_sockfd);
-
+                    
+                    SSL_shutdown(user[i].audio_ssl);
+                    SSL_free(user[i].audio_ssl);
+                    close(user[i].audio_sockfd);
+                    
                     pthread_mutex_unlock(&thread_pool.mutex);
                     break;
                 }
@@ -528,6 +558,54 @@ void *handle_client(void *arg){
                 pthread_mutex_unlock(&thread_pool.mutex);
             }
         }
+        else if (buffer[0] == '&'){ // &from#to$audio_name@audio_size
+            string name = "", username = "", audio_name = "", _audio_size = "";
+            long audio_size = 0;
+            for (int i = 1; buffer[i] != '#'; ++i)
+                username += buffer[i];
+            for (int i = username.size() + 2; buffer[i] != '$'; ++i)
+                name += buffer[i];
+            for (int i = name.size() + username.size() + 3; buffer[i] != '@'; ++i)
+                audio_name += buffer[i];
+            for (int i = audio_name.size() + name.size() + username.size() + 4; i < bytes; ++i)
+                _audio_size += buffer[i];
+            audio_size = stol(_audio_size);
+
+            bool success = false;
+            for (int i = 0; i < user_count; ++i){
+                if (user[i].username == name){
+                    success = true;
+                    break;
+                }
+            }
+            
+            if (success == false){
+                send_message(ssl, "Failed");
+                cout << "[User not found]\n";
+            }
+            else{
+                send_message(ssl, "Success"); // tell client ready to receive
+
+                // receive audio and store
+                FILE *file = fopen(audio_name.c_str(), "wb");
+                if (file == NULL){
+                    cout << "[Audio open failed]\n";
+                    continue;
+                }
+
+                while (audio_size > 0){
+                    string _buffer = recv_message(ssl);
+                    fwrite(_buffer.c_str(), 1, _buffer.size(), file);
+                    send_message(ssl, "Success");
+                    audio_size -= _buffer.size();
+                }
+                
+                fclose(file);
+                pthread_mutex_lock(&thread_pool.mutex);
+                audios[name].push_back(buffer); // &from#to$audio_name@audio_size
+                pthread_mutex_unlock(&thread_pool.mutex);
+            }
+        }
         else if (buffer == "@file@"){ // send file to receiver
             while (!files[User].empty()){
                 string _file = files[User].back();
@@ -579,9 +657,66 @@ void *handle_client(void *arg){
                     file_size -= _bytes;
                 }
             }
-
-            debug(files[User].size());
             send_message(file_ssl, "No more files");
+        }
+        else if (buffer == "@audio@"){ // send audio to receiver
+            while (!audios[User].empty()){
+                string _audio = audios[User].back();
+                audios[User].pop_back();
+                send_message(audio_ssl, _audio);
+                string res = recv_message(audio_ssl);
+                if (res != "Success"){
+                    cout << "[Audio transfer failed]\n";
+                    break;
+                }
+
+                string name = "", username = "", audio_name = "";
+                long audio_size = 0;
+                for (int i = 1; _audio[i] != '#'; ++i)
+                    name += _audio[i];
+                for (int i = name.size() + 2; _audio[i] != '$'; ++i)
+                    username += _audio[i];
+                for (int i = name.size() + username.size() + 3; _audio[i] != '@'; ++i)
+                    audio_name += _audio[i];
+
+                FILE *file = fopen(audio_name.c_str(), "rb");
+                if (file == NULL){
+                    cout << "[Audio file not found]\n";
+                    continue;
+                }
+
+                SDL_AudioSpec wav_spec;
+                Uint32 wav_length;
+                Uint8 *wav_buffer;
+
+                if (SDL_LoadWAV(audio_name.c_str(), &wav_spec, &wav_buffer, &wav_length) == NULL){
+                    cout << "[Audio file not found]\n";
+                    continue;
+                }
+                
+                while (audio_size < wav_length){
+                    int _bytes = min(2048, (int)(wav_length - audio_size));
+                    int attempt = 0;
+                    while (1){
+                        send_message(audio_ssl, string((char *)(wav_buffer + audio_size) , _bytes));
+                        res = recv_message(audio_ssl);
+                        if (res == "Success")
+                            break;
+                        else{
+                            attempt++;
+                            if (attempt == 10){
+                                cout << "[Transfer audio failed]\n";
+                                pthread_exit(NULL);
+                            }
+                        }
+                    }
+                    audio_size += _bytes;
+                }
+                send_message(audio_ssl, "Finished");
+
+                SDL_FreeWAV(wav_buffer);
+            }
+            send_message(audio_ssl, "Nomoreaudios");
         }
     }
     

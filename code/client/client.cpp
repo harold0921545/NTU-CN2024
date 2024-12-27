@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <map>
+#include <vector>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 /*
@@ -16,6 +17,7 @@
 #include <openssl/crypto.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <SDL2/SDL.h>
 
 
 #define debug(x) cerr << #x << " = " << x << '\n'
@@ -37,21 +39,24 @@ void open_chat(SSL *ssl, string name, string username);
 void chat_message(SSL *ssl, string name, string username);
 void transfer_file(SSL *ssl, string name, string username);
 void file_receiver(SSL *ssl);
+void audio_transfer(SSL *ssl, string name, string username);
+void audio_receiver(SSL *ssl);
 
-string server_ip, chat_port, file_port;
+string server_ip, chat_port, file_port, audio_port;
 bool Login = false;
-SSL *chatting_ssl, *file_transfer_ssl;
+SSL *chatting_ssl, *file_transfer_ssl, *audio_transfer_ssl;
 map<string, string> chat_history;
 
-int main(int argc, char *argv[]) { // argv[1]: IP address of the server, argv[2]: port number, argv[3]: chat port number, argv[4]: file port number
-    if (argc != 5) {
-        cout << "Usage: " << argv[0] << " <IP> <Port1> <Port2> <Port3>\n";
+int main(int argc, char *argv[]) { // argv[1]: IP address of the server, argv[2]: port number, argv[3]: chat port number, argv[4]: file port number, argv[5]: audio port number
+    if (argc != 6){
+        cout << "Usage: " << argv[0] << " <IP> <Port1> <Port2> <Port3> <Port4>\n";
         return 1;
     }
     
     server_ip = argv[1];
     chat_port = argv[3];
     file_port = argv[4];
+    audio_port = argv[5];
     
     string messages, res;
     int sockfd = socket_init();
@@ -152,7 +157,9 @@ void select_options(SSL *ssl, int num){
         cout << "1. Texting\n";
         cout << "2. Transfer file\n";
         cout << "3. Receive file\n";
-        cout << "4. Logout\n";
+        cout << "4. Transfer audio\n";
+        cout << "5. Receive audio\n";
+        cout << "6. Logout\n";
         cout << "Selection: ";
     }
     else if (num == 3){ // send message
@@ -301,10 +308,6 @@ void login_sucess(SSL *ssl, string username){
     int file_transfer_sockfd = socket_init();
     connect_server(file_transfer_sockfd, (char *)server_ip.c_str(), (char *)file_port.c_str());
 
-    // non-blocking mode
-    // flags = fcntl(file_transfer_sockfd, F_GETFL, 0);
-    // fcntl(file_transfer_sockfd, F_SETFL, flags | O_NONBLOCK);
-
     file_transfer_ssl = SSL_new(ctx);
     SSL_set_fd(file_transfer_ssl, file_transfer_sockfd);
     attempt = 0;
@@ -319,6 +322,24 @@ void login_sucess(SSL *ssl, string username){
     }
     cout << "[File transfer SSL connection established]\n";
 
+    // audio receving socket
+    int audio_transfer_sockfd = socket_init();
+    connect_server(audio_transfer_sockfd, (char *)server_ip.c_str(), (char *)audio_port.c_str());
+
+    audio_transfer_ssl = SSL_new(ctx);
+    SSL_set_fd(audio_transfer_ssl, audio_transfer_sockfd);
+    attempt = 0;
+    while (SSL_connect(audio_transfer_ssl) <= 0) {
+        if (attempt == 10){
+            cout << "[SSL connection failed]\n";
+            close(audio_transfer_sockfd);
+            return ;
+        }
+        attempt++;
+        sleep(1);
+    }
+    cout << "[Audio transfer SSL connection established]\n";
+
     Login = true;
 
     while (1){
@@ -328,13 +349,13 @@ void login_sucess(SSL *ssl, string username){
         string select, messages;
         getline(cin, select);
         
-        if (select.size() != 1 || select[0] < '1' || select[0] > '4') {
+        if (select.size() != 1 || select[0] < '1' || select[0] > '6') {
             cout << "[Invalid selection]\n";
             continue;
         }
         int selection = select[0] - '0';
 
-        if (selection == 1 || selection == 2){ // send message, file transfer
+        if (selection == 1 || selection == 2 || selection == 4){ // send message, file transfer, audio transfer
             select_options(ssl, 3);
             string name, msg;
             getline(cin, name);
@@ -358,11 +379,16 @@ void login_sucess(SSL *ssl, string username){
                 open_chat(ssl, name, username);
             else if (selection == 2)
                 transfer_file(ssl, name, username);
+            else if (selection == 4)
+                audio_transfer(ssl, name, username);
         }
         else if (selection == 3){ // receive file
             file_receiver(ssl);
         }
-        else if (selection == 4){ // logout
+        else if (selection == 5){ // receive audio
+            audio_receiver(ssl);
+        }
+        else if (selection == 6){ // logout
             receiver(ssl);
 
             send_message(ssl, "@logout@");
@@ -373,8 +399,15 @@ void login_sucess(SSL *ssl, string username){
     close(chatting_sockfd);
     SSL_shutdown(chatting_ssl);
     SSL_free(chatting_ssl);
-    SSL_CTX_free(ctx);
 
+    close(file_transfer_sockfd);
+    SSL_shutdown(file_transfer_ssl);
+    SSL_free(file_transfer_ssl);
+
+    close(audio_transfer_sockfd);
+    SSL_shutdown(audio_transfer_ssl);
+    SSL_free(audio_transfer_ssl);
+    
     Login = false;
     return ;
 }
@@ -535,8 +568,119 @@ void transfer_file(SSL *ssl, string name, string username){
         file_size -= bytes;
     }
 
-    // debug(file_size);
-
     fclose(file);
     cout << "[Transfer file success]\n";
+}
+
+void audio_transfer(SSL *ssl, string name, string username){
+    string audio_name;
+    cout << "Please enter audio file name: ";
+    getline(cin, audio_name);
+
+    if (audio_name.empty()) {
+        cout << "Empty audio file name\n";
+        return ;
+    }
+
+    FILE *audio = fopen(audio_name.c_str(), "rb");
+    if (audio == NULL){
+        cout << "Audio file not found\n";
+        return ;
+    }
+
+    fseek(audio, 0, SEEK_END);
+    long audio_size = ftell(audio);
+    rewind(audio);
+    char buffer[2048] = {0};
+
+    string msg = "&" + username + "#" + name + "$" + audio_name + "@" + to_string(audio_size); // &from#to$audio_name@audio_size
+    send_message(ssl, msg);
+    string res = recv_message(ssl); // server response
+
+    if (res == "Failed"){
+        cout << "[Transfer audio failed]\n";
+        return ;
+    }
+
+    while (audio_size > 0){
+        int bytes = fread(buffer, 1, sizeof(buffer), audio);
+        int attempt = 0;
+        while (1){
+            send_message(ssl, string(buffer, bytes));
+            res = recv_message(ssl);
+            
+            if (res == "Success"){
+                memset(buffer, 0, sizeof(buffer));
+                break;
+            }
+            else{
+                attempt++;
+                if (attempt == 10){
+                    cout << "[Transfer audio failed]\n";
+                    return ;
+                }
+            }
+        }
+        audio_size -= bytes;
+    }
+
+    fclose(audio);
+    cout << "[Transfer audio success]\n";
+}
+
+
+void audio_receiver(SSL *ssl){
+    // audio transfer
+    while (1){
+        send_message(ssl, "@audio@");
+        string res2 = recv_message(audio_transfer_ssl);
+
+        if (res2 == "Nomoreaudios" || res2.empty())
+            break;
+        string name = "", username = "", audio_name = "";
+        for (int i = 1; res2[i] != '#'; ++i)
+            name += res2[i];
+        for (int i = name.size() + 2; res2[i] != '$'; ++i)
+            username += res2[i];
+        for (int i = name.size() + username.size() + 3; res2[i] != '@'; ++i)
+            audio_name += res2[i];
+        cout << "[New audio from " << name << "] " << audio_name << '\n';
+
+        SDL_AudioSpec spec;
+        spec.freq = 44100;
+        spec.format = AUDIO_S16SYS;
+        spec.channels = 2;
+        spec.samples = 1024;
+        spec.callback = nullptr;
+        spec.userdata = nullptr;
+
+        SDL_AudioDeviceID device_id = SDL_OpenAudioDevice(nullptr, 0, &spec, nullptr, 0);
+        if (device_id == 0) {
+            cerr << "[Audio Device Open Error] " << SDL_GetError() << endl;
+            send_message(audio_transfer_ssl, "Failed");
+            SDL_Quit();
+            return;
+        }
+
+        SDL_PauseAudioDevice(device_id, 0);
+        send_message(audio_transfer_ssl, "Success");
+
+        while (true) {
+            string buffer = recv_message(audio_transfer_ssl);
+            if (buffer == "Finished") {
+                break;
+            }
+            if (SDL_QueueAudio(device_id, buffer.data(), buffer.size()) < 0) {
+                cerr << "[SDL QueueAudio Error] " << SDL_GetError() << endl;
+                break;
+            }
+
+            send_message(audio_transfer_ssl, "Success");
+        }
+
+        SDL_CloseAudioDevice(device_id);
+        SDL_Quit();
+        cout << "[Audio streaming finished]\n";
+
+    }
 }

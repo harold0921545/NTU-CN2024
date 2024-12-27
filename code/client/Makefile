@@ -1,9 +1,9 @@
 FLAGS=-Wall -Werror -Wshadow -std=c++17
 SSL=-lssl -lcrypto
-CV=`pkg-config --cflags --libs opencv4`
+SDL2=-lSDL2
 
 all:
-	g++ $(FLAGS) client.cpp -o client $(SSL) $(CV)
+	g++ $(FLAGS) client.cpp -o client $(SSL) $(SDL2)
 
 .PHONY: clean
 clean:

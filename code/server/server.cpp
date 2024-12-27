@@ -169,7 +169,7 @@ int socket_init(char *port){
         cout << "[Creating socket failed]\n";
         return -1;
     }
-    cout << "[Socket created]\n";
+    // cout << "[Socket created]\n";
     // bind
     sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
@@ -181,7 +181,7 @@ int socket_init(char *port){
         close(sockfd);
         return -1;
     }
-    cout << "[Socket bound]\n";
+    // cout << "[Socket bound]\n";
 
     // listen
     if (listen(sockfd, 10) < 0) { // 10 is the maximum number of connections
@@ -189,7 +189,7 @@ int socket_init(char *port){
         close(sockfd);
         return -1;
     }
-    cout << "[Listening]\n";
+    // cout << "[Listening]\n";
 
     // set non-blocking
     int flags = fcntl(sockfd, F_GETFL, 0);
@@ -266,7 +266,7 @@ void *handle_client(void *arg){
         // recieve
         string buffer = recv_message(ssl);
         int bytes = buffer.size();
-        cout << "Recieved: " << buffer << '\n';
+        // cout << "Recieved: " << buffer << '\n';
         bool special = false;
         if (buffer[0] == '/' && buffer[1] == '$'){
             for (int i = 2; i < bytes - 1; ++i){
@@ -294,6 +294,7 @@ void *handle_client(void *arg){
 
             if (login){
                 // chat port
+                cout << "[User: " << username <<  " login request]\n";
                 string chat_port = "";
                 int I = buffer.size() - 1;
                 while (buffer[I] != '#')
@@ -390,6 +391,7 @@ void *handle_client(void *arg){
                 }
             }
             else{ // register
+                cout << "[User: " << username <<  " register request]\n";
                 if (user_count > 4096){ // too many users
                     send_message(ssl, "Failed");
                     cout << "[User full]\n";
@@ -420,6 +422,7 @@ void *handle_client(void *arg){
             }
         }
         else if (buffer == "@logout@"){
+            cout << "[User " << User << " logout request]\n";
             string name;
             for (int i = 0; i < user_count; ++i){
                 if (user[i].sockfd == client_sockfd){
@@ -457,7 +460,7 @@ void *handle_client(void *arg){
             for (auto it = online_users.begin(); it != online_users.end(); ++it)
                 res += (to_string(++count) + ". " + *it + "\n");
             send_message(ssl, res);
-            cout << "[Online users sent]\n";
+            cout << "[Online users request]\n";
         }
         else if (buffer.substr(0, 8) == "@verify@"){
             string name = "";
@@ -511,6 +514,7 @@ void *handle_client(void *arg){
         }
         else if (buffer[0] == '%'){ // file transfer
             // %from#to$file_name@file_size
+            cout << "[" << User << " file transfer request]\n";
             string name = "", username = "", file_name = "", _file_size = "";
             long file_size = 0;
             for (int i = 1; buffer[i] != '#'; ++i)
@@ -559,6 +563,7 @@ void *handle_client(void *arg){
             }
         }
         else if (buffer[0] == '&'){ // &from#to$audio_name@audio_size
+            cout << "[" << User << " audio transfer request]\n";
             string name = "", username = "", audio_name = "", _audio_size = "";
             long audio_size = 0;
             for (int i = 1; buffer[i] != '#'; ++i)
@@ -607,6 +612,7 @@ void *handle_client(void *arg){
             }
         }
         else if (buffer == "@file@"){ // send file to receiver
+            cout << "[" << User << " file receiving request]\n";
             while (!files[User].empty()){
                 string _file = files[User].back();
                 files[User].pop_back();
@@ -660,6 +666,7 @@ void *handle_client(void *arg){
             send_message(file_ssl, "No more files");
         }
         else if (buffer == "@audio@"){ // send audio to receiver
+            cout << "[" << User << " audio receving request]\n";
             while (!audios[User].empty()){
                 string _audio = audios[User].back();
                 audios[User].pop_back();
@@ -694,7 +701,7 @@ void *handle_client(void *arg){
                     continue;
                 }
                 
-                int frame_size = wav_spec.channels * sizeof(Sint16);
+                int frame_size = (wav_spec.channels + 1) * sizeof(Sint16);
 
                 while (audio_size < wav_length){
                     int _bytes = min(frame_size, (int)(wav_length - audio_size));

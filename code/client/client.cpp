@@ -76,6 +76,8 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server, argv[2]
         return 1;
     }
     cout << "[SSL connection established]\n";
+    cout << "[Welcome to the chat room]\n";
+
     // Login or Register
     while (1){
         select_options(ssl, 1);
@@ -148,12 +150,14 @@ int main(int argc, char *argv[]) { // argv[1]: IP address of the server, argv[2]
 
 void select_options(SSL *ssl, int num){
     if (num == 1){ // login or register
+        cout << "### Options ###\n";
         cout << "1. Register\n";
         cout << "2. Login\n";
         cout << "3. Exit\n";
         cout << "Selection: ";
     }
     else if (num == 2){ // login success
+        cout << "### Options ###\n";
         cout << "1. Texting\n";
         cout << "2. Transfer file\n";
         cout << "3. Receive file\n";
@@ -166,12 +170,13 @@ void select_options(SSL *ssl, int num){
         // ask server for online users
         send_message(ssl, "@listonline@");
         string res = recv_message(ssl);
-        cout << res;
+        cout << "Online users: " << '\n' << res;
         cout << "Please enter an user name: ";
     }
     else if (num == 4){ // chat
         cout << "1. Text\n";
         cout << "2. End\n";
+        cout << "Selection: ";
     }
 }
 
@@ -217,8 +222,6 @@ void send_message(SSL *ssl, string messages){
         }
         attempt++;
     }
-    // cout << messages << '\n';
-    // cout << "[Message sent]\n";
 }
 
 string recv_message(SSL *ssl){
@@ -266,7 +269,7 @@ void connect_server(int sockfd, char *ip, char *port){
         attempt++;
         sleep(1);
     }
-    cout << "[Connected]\n";
+    cout << "[Connecting]\n";
 }
 
 int socket_init(){
@@ -275,7 +278,6 @@ int socket_init(){
         cout << "[Creating socket failed]\n";
         exit(1);
     }
-    cout << "[Socket created]\n";
     return sockfd;
 }
 
@@ -438,14 +440,15 @@ void receiver(SSL *ssl){ // receving chat message
     }
 }
 
-void file_receiver(SSL *ssl){
-    // file transfer
+void file_receiver(SSL *ssl){ // file transfer
+    int cnt = 0;
     while (1){
         send_message(ssl, "@file@");
         string res2 = recv_message(file_transfer_ssl);
         
         if (res2 == "No more files" || res2.empty())
             break;
+        cnt++;
         string name = "", username = "", file_name = "", _file_size = "";
         long file_size = 0;
         for (int i = 1; res2[i] != '#'; ++i)
@@ -463,7 +466,7 @@ void file_receiver(SSL *ssl){
 
         FILE *file = fopen(file_name.c_str(), "wb");
         if (file == NULL){
-            cout << "File not found\n";
+            cout << "[File not found]\n";
             return ;
         }
         while (file_size > 0){
@@ -475,6 +478,8 @@ void file_receiver(SSL *ssl){
         fclose(file);
         cout << "[File " << file_name <<  " received]\n";
     }
+    if (cnt == 0)
+        cout << "[No file available]\n";
 }
 
 void open_chat(SSL *ssl, string name, string username){
@@ -529,7 +534,7 @@ void transfer_file(SSL *ssl, string name, string username){
     }
     FILE *file = fopen(file_name.c_str(), "rb");
     if (file == NULL){
-        cout << "File not found\n";
+        cout << "[File not found]\n";
         return ;
     }
     fseek(file, 0, SEEK_END);
@@ -578,13 +583,13 @@ void audio_transfer(SSL *ssl, string name, string username){
     getline(cin, audio_name);
 
     if (audio_name.empty()) {
-        cout << "Empty audio file name\n";
+        cout << "[Empty audio file name]\n";
         return ;
     }
 
     FILE *audio = fopen(audio_name.c_str(), "rb");
     if (audio == NULL){
-        cout << "Audio file not found\n";
+        cout << "[Audio file not found]\n";
         return ;
     }
 
@@ -631,12 +636,14 @@ void audio_transfer(SSL *ssl, string name, string username){
 
 void audio_receiver(SSL *ssl){
     // audio transfer
+    int cnt = 0;
     while (1){
         send_message(ssl, "@audio@");
         string res2 = recv_message(audio_transfer_ssl);
 
         if (res2 == "Nomoreaudios" || res2.empty())
             break;
+        cnt++;
         string name = "", username = "", audio_name = "";
         for (int i = 1; res2[i] != '#'; ++i)
             name += res2[i];
@@ -687,6 +694,7 @@ void audio_receiver(SSL *ssl){
         SDL_CloseAudioDevice(device_id);
         SDL_Quit();
         cout << "[Audio streaming finished]\n";
-
     }
+    if (cnt == 0)
+        cout << "[No audio available]\n";
 }

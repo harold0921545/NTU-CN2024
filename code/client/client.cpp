@@ -654,6 +654,12 @@ void audio_receiver(SSL *ssl){
         spec.callback = nullptr;
         spec.userdata = nullptr;
 
+        if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+            cerr << "[SDL Init Error] " << SDL_GetError() << endl;
+            send_message(audio_transfer_ssl, "Failed");
+            return;
+        }
+
         SDL_AudioDeviceID device_id = SDL_OpenAudioDevice(nullptr, 0, &spec, nullptr, 0);
         if (device_id == 0) {
             cerr << "[Audio Device Open Error] " << SDL_GetError() << endl;

@@ -694,8 +694,10 @@ void *handle_client(void *arg){
                     continue;
                 }
                 
+                int frame_size = wav_spec.channels * sizeof(Sint16);
+
                 while (audio_size < wav_length){
-                    int _bytes = min(2048, (int)(wav_length - audio_size));
+                    int _bytes = min(frame_size, (int)(wav_length - audio_size));
                     int attempt = 0;
                     while (1){
                         send_message(audio_ssl, string((char *)(wav_buffer + audio_size) , _bytes));
